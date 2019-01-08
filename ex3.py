@@ -1,5 +1,6 @@
 from collections import Counter
 import argparse
+import logging
 import math
 import re
 
@@ -10,6 +11,7 @@ LIDSTONE_LAMBDA = 0.5
 ITERATION_COUNT = 30
 CLUSTERS = range(9)
 EPSILON = 0.0001
+K = 10.0
 
 
 def get_vocabulary(articles_file_path):
@@ -56,21 +58,52 @@ def build_ntk(articles, vocabulary):
     return ntk
 
 
-def compute_wti(articles, vocabulary, ntk, alpha, zti):
-    pass
-
-
-def compute_alpha(articles, wti):
-    pass
-
-
-def compute_pik(articles, vocabulary, wti, ntk):
-    pass
-
-
 def compute_zti(articles, vocabulary, ntk, alpha, pik):
     return [[math.log(alpha[i]) + sum([math.log(pik[i][k]) * ntk[t][k] for k in range(len(vocabulary))])
              for i in range(len(CLUSTERS))] for t in range(len(articles))]
+
+
+def compute_wti(articles, zti):
+    wti = [[0 for _ in CLUSTERS] for _ in articles]
+    for t in range(len(articles)):
+        m = max(zti[t])
+        for i in range(len(CLUSTERS)):
+            if zti[t][i] - m >= -K:
+                wti[t][i] = \
+                    math.exp(zti[t][i] - m) / sum([math.exp(zti[t][j] - m) for j in CLUSTERS if zti[t][j] - m >= -K])
+    return wti
+
+
+def compute_alpha(articles, wti):
+    alpha = [0 for _ in CLUSTERS]
+    for i in range(len(CLUSTERS)):
+        alpha[i] = sum([wti[t][i] for t in range(len(articles))]) / len(articles)
+        if alpha[i] == 0:
+            alpha[i] = EPSILON
+
+    alpha = [alpha[i] / sum(alpha) for i in range(len(alpha))]
+    return alpha
+
+
+def compute_pik(articles, vocabulary, wti, ntk):
+    pik = [[0 for _ in vocabulary] for _ in CLUSTERS]
+    for i in range(len(CLUSTERS)):
+        denominator = LIDSTONE_LAMBDA * len(vocabulary) + \
+                      sum(wti[t][i] * len(articles[t]["text"].split()) for t in range(len(articles)))
+        for k in range(len(vocabulary)):
+            numerator = LIDSTONE_LAMBDA + sum(wti[t][i] * ntk[t][k] for t in range(len(articles)))
+            pik[i][k] = numerator / denominator
+    return pik
+
+
+def compute_log_likelihood(articles, vocabulary, ntk, alpha, pik):
+    log_likelihood = 0
+    zti = compute_zti(articles, vocabulary, ntk, alpha, pik)
+    for t in range(len(articles)):
+        m = max(zti[t])
+        sum_above_clusters = sum([math.exp(zti[t][i] - m) for i in range(len(CLUSTERS)) if zti[t][i] - m >= -K])
+        log_likelihood += m + math.log(sum_above_clusters)
+    return log_likelihood
 
 
 def run_em_initialization(articles, vocabulary):
@@ -81,7 +114,7 @@ def run_em_initialization(articles, vocabulary):
 
 def run_e_phase(articles, vocabulary, ntk, alpha, pik):
     zti = compute_zti(articles, vocabulary, ntk, alpha, pik)
-    wti = compute_wti(articles, vocabulary, ntk, alpha, zti)
+    wti = compute_wti(articles, zti)
     return wti
 
 
@@ -92,12 +125,15 @@ def run_m_phase(articles, vocabulary, wti, ntk):
 
 
 def run_em(articles, vocabulary):
+    logging.debug("EM start")
     wti, ntk = run_em_initialization(articles, vocabulary)
     alpha, pik = run_m_phase(articles, vocabulary, wti, ntk)
 
     for iteration_number in range(ITERATION_COUNT):
+        logging.debug("Iteration %d", iteration_number)
         wti = run_e_phase(articles, vocabulary, ntk, alpha, pik)
         alpha, pik = run_m_phase(articles, vocabulary, wti, ntk)
+        logging.debug("Log likelihood = %f", compute_log_likelihood(articles, vocabulary, ntk, alpha, pik))
 
 
 def get_arguments():
@@ -113,4 +149,5 @@ def main(args):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
     main(get_arguments())
