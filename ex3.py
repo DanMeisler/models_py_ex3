@@ -4,14 +4,25 @@ import logging
 import math
 import re
 
-
 SET_FILE_HEADER_LINE_REGEX = r"^<\w+\s+\d+\s*(.*)>$"
-WORD_IS_COUNT_THRESHOLD = 4
-LIDSTONE_LAMBDA = 0.5
+WORD_IS_COUNT_THRESHOLD = 4  # filter words that appear less than 4 times in the whole corpus
+LIDSTONE_LAMBDA = 0.5  # lidstone smoothing for m step
 ITERATION_COUNT = 30
 CLUSTERS = range(9)
-EPSILON = 0.0001
-K = 10.0
+EPSILON = 0.0001  # alphas cannot be zeros
+K = 10.0  # precision parameter for underflow handling
+
+"""
+Dictionary:
+wti - the weights
+ntk - word frequency
+alpha - P(cluster i)
+pik - pik[i][k] == P(word k | cluster i)
+zti - log of the numerator of the resulted wti (wti[t][i])
+t - iterates over the articles
+k - iterates over the vocabulary
+i - iterates over the clusters
+"""
 
 
 def get_vocabulary(articles_file_path):
@@ -22,7 +33,9 @@ def get_vocabulary(articles_file_path):
             if not re.match(SET_FILE_HEADER_LINE_REGEX, line):
                 words_counter.update(line.split())
 
-    return list(filter(lambda x: words_counter[x] >= WORD_IS_COUNT_THRESHOLD, words_counter))
+    vocabulary = list(filter(lambda x: words_counter[x] >= WORD_IS_COUNT_THRESHOLD, words_counter))
+    word_count = sum([x for x in words_counter.values() if x >= WORD_IS_COUNT_THRESHOLD])
+    return vocabulary, word_count
 
 
 def get_articles(articles_file_path, vocabulary):
@@ -126,6 +139,10 @@ def compute_log_likelihood(articles, t_k_map, ntk, alpha, pik):
     return log_likelihood
 
 
+def compute_perplexity(log_likelihood, word_count):
+    return math.exp(-log_likelihood / word_count)
+
+
 def run_em_initialization(articles, vocabulary):
     wti = build_wti(articles)
     ntk = build_ntk(articles, vocabulary)
@@ -144,10 +161,9 @@ def run_m_phase(articles, vocabulary, k_t_map, wti, ntk):
     return alpha, pik
 
 
-def run_em(articles, vocabulary, k_t_map, t_k_map):
+def run_em(articles, vocabulary, word_count, k_t_map, t_k_map):
     logging.debug("EM initialization start")
     wti, ntk = run_em_initialization(articles, vocabulary)
-    logging.debug("EM initialization done")
     alpha, pik = run_m_phase(articles, vocabulary, k_t_map, wti, ntk)
 
     for iteration_number in range(ITERATION_COUNT):
@@ -156,7 +172,10 @@ def run_em(articles, vocabulary, k_t_map, t_k_map):
         wti = run_e_phase(articles, t_k_map, ntk, alpha, pik)
         logging.debug("M start")
         alpha, pik = run_m_phase(articles, vocabulary, k_t_map, wti, ntk)
-        logging.debug("Log likelihood = %f", compute_log_likelihood(articles, t_k_map, ntk, alpha, pik))
+        log_likelihood = compute_log_likelihood(articles, t_k_map, ntk, alpha, pik)
+        logging.debug("Log likelihood = %f", log_likelihood)
+        perplexity = compute_perplexity(log_likelihood, word_count)
+        logging.debug("Perplexity = %f", perplexity)
 
 
 def get_arguments():
@@ -166,11 +185,13 @@ def get_arguments():
 
 
 def main(args):
-    vocabulary = get_vocabulary(args.develop_file_path)
+    logging.debug("Start")
+    vocabulary, word_count = get_vocabulary(args.develop_file_path)
+    logging.debug("word count = %d", word_count)
     articles = get_articles(args.develop_file_path, vocabulary)
     k_t_map = build_k_t_map(articles, vocabulary)
     t_k_map = build_t_k_map(articles, vocabulary)
-    run_em(articles, vocabulary, k_t_map, t_k_map)
+    run_em(articles, vocabulary, word_count, k_t_map, t_k_map)
 
 
 if __name__ == "__main__":
