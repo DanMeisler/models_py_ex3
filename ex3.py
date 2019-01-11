@@ -304,7 +304,7 @@ def run_em(articles, vocabulary, word_count):
     wti, ntk = run_em_initialization(articles, vocabulary)
     alpha, pik = run_m_phase(articles, vocabulary, k_t_map, wti, ntk)
     log_likelihoods = [compute_log_likelihood(articles, t_k_map, ntk, alpha, pik)]
-
+    perplexities = [compute_perplexity(log_likelihoods[-1], word_count)]
     for iteration_number in range(MAX_ITERATION_COUNT):
         logging.debug("%d - expectation start", iteration_number)
         wti = run_e_phase(articles, t_k_map, ntk, alpha, pik)
@@ -312,8 +312,8 @@ def run_em(articles, vocabulary, word_count):
         alpha, pik = run_m_phase(articles, vocabulary, k_t_map, wti, ntk)
         log_likelihoods.append(compute_log_likelihood(articles, t_k_map, ntk, alpha, pik))
         logging.debug("%d - log likelihood = %f", iteration_number, log_likelihoods[-1])
-        perplexity = compute_perplexity(log_likelihoods[-1], word_count)
-        logging.debug("%d - perplexity = %f", iteration_number, perplexity)
+        perplexities.append(compute_perplexity(log_likelihoods[-1], word_count))
+        logging.debug("%d - perplexity = %f", iteration_number, perplexities[-1])
         if log_likelihoods[-2] > log_likelihoods[-1] - STOP_EM_LOG_LIKELIHOOD_THRESHOLD:
             break
 
