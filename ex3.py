@@ -7,8 +7,9 @@ import re
 TOPICS = ['acq', 'money-fx', 'grain', 'crude', 'trade', 'interest', 'ship', 'wheat', 'corn']
 SET_FILE_HEADER_LINE_REGEX = r"^<\w+\s+\d+\s*(.*)>$"
 WORD_IS_COUNT_THRESHOLD = 4  # filter words that appear less than 4 times in the whole corpus
+STOP_EM_LOG_LIKELIHOOD_THRESHOLD = 10
 LIDSTONE_LAMBDA = 0.5  # lidstone smoothing for m step
-ITERATION_COUNT = 30
+MAX_ITERATION_COUNT = 35
 CLUSTERS = [{} for i in range(9)]
 EPSILON = 0.0001  # alphas cannot be zeros
 K = 10.0  # precision parameter for underflow handling
@@ -27,6 +28,11 @@ i - iterates over the clusters
 
 
 def get_vocabulary(articles_file_path):
+    """
+    Create the vocabulary from develop.txt file with filtering by word threshold
+    :param articles_file_path: path to article.txt file
+    :return: Vocabulary in the form of [word_1, word_2, ..., word_k, ..., word_|V|]
+    """
     words_counter = Counter()
     with open(articles_file_path) as articles_file:
         for line in articles_file:
@@ -40,6 +46,12 @@ def get_vocabulary(articles_file_path):
 
 
 def get_articles(articles_file_path, vocabulary):
+    """
+    Create the articles list
+    :param articles_file_path: path to article.txt file
+    :param vocabulary: a vocabulary (See get_vocabulary's doc for more info)
+    :return: articles in the form of [{"topics": [topic_1, topic_2, ...], "text": article_text}]
+    """
     articles = []
     with open(articles_file_path) as articles_file:
         for line in articles_file:
@@ -57,6 +69,12 @@ def get_articles(articles_file_path, vocabulary):
 
 
 def build_k_t_map(articles, vocabulary):
+    """
+    Create map for speed up EM algorithm
+    :param articles: articles (See get_articles's doc for more info)
+    :param vocabulary: a vocabulary (See get_vocabulary's doc for more info)
+    :return: a map in the form of {k:[t, t, ...], k:[t, t, ...], ...}
+    """
     k_t_map = defaultdict(list)
     for k, word in enumerate(vocabulary):
         k_t_map[k] = list(filter(lambda x: word in articles[x]["text"], range(len(articles))))
@@ -64,6 +82,12 @@ def build_k_t_map(articles, vocabulary):
 
 
 def build_t_k_map(articles, vocabulary):
+    """
+    Create map for speed up EM algorithm
+    :param articles: articles (See get_articles's doc for more info)
+    :param vocabulary: a vocabulary (See get_vocabulary's doc for more info)
+    :return: a map in the form of {t:[k, k, ...], t:[k, k, ...], ...}
+    """
     t_k_map = defaultdict(list)
     for t, article in enumerate(articles):
         t_k_map[t] = [vocabulary.index(word) for word in set(article["text"].split())]
@@ -71,6 +95,11 @@ def build_t_k_map(articles, vocabulary):
 
 
 def build_wti(articles):
+    """
+    (See dictionary above for more info)
+    :param articles: articles (See get_articles's doc for more info)
+    :return: initialized wti
+    """
     wti = defaultdict(lambda: defaultdict(lambda: 0))
     for t in range(len(articles)):
         wti[t][t % len(CLUSTERS)] = 1.0
@@ -78,6 +107,12 @@ def build_wti(articles):
 
 
 def build_ntk(articles, vocabulary):
+    """
+    (See dictionary above for more info)
+    :param articles: articles (See get_articles's doc for more info)
+    :param vocabulary: a vocabulary (See get_vocabulary's doc for more info)
+    :return: ntk
+    """
     ntk = defaultdict(lambda: defaultdict(lambda: 0))
     for t in range(len(articles)):
         word_counter = Counter(articles[t]['text'].split())
@@ -87,6 +122,11 @@ def build_ntk(articles, vocabulary):
 
 
 def build_clusters(articles, wti):
+    """
+    Each cluster will be in the form of {["topics":Counter({topic_1: topic_1_count, ...}), "article_indexes": set()]}
+    :param articles: articles (See get_articles's doc for more info)
+    :param wti: (See dictionary above for more info)
+    """
     for cluster in CLUSTERS:
         cluster["topics"] = Counter()
         cluster["articles_indexes"] = set()
@@ -98,6 +138,10 @@ def build_clusters(articles, wti):
 
 
 def build_confusion_matrix():
+    """
+    Build confusion matrix from CLUSTERS global variable
+    :return: matrix in the form of [[], [], ...]
+    """
     sorted_clusters = sorted(CLUSTERS, key=lambda x: len(x["articles_indexes"]), reverse=True)
     matrix_column_count = len(TOPICS) + 1
     matrix_row_count = len(sorted_clusters)
@@ -112,6 +156,10 @@ def build_confusion_matrix():
 
 
 def compute_accuracy(articles):
+    """
+    :param articles: articles (See get_articles's doc for more info)
+    :return: The accuracy of the model
+    """
     correct_assignment_count = 0
     for cluster in CLUSTERS:
         cluster_label = cluster["topics"].most_common(1)[0][0]
@@ -123,6 +171,14 @@ def compute_accuracy(articles):
 
 
 def compute_zti(articles, t_k_map, ntk, alpha, pik):
+    """
+    :param articles: articles (See get_articles's doc for more info)
+    :param t_k_map: (See build_t_k_map's doc for more info)
+    :param ntk: ntk (See dictionary above for more info)
+    :param alpha: alphas (See dictionary above for more info)
+    :param pik: pik (See dictionary above for more info)
+    :return: zti (See dictionary above for more info)
+    """
     zti = defaultdict(lambda: defaultdict(lambda: 0))
     for t in range(len(articles)):
         for i in range(len(CLUSTERS)):
@@ -131,6 +187,11 @@ def compute_zti(articles, t_k_map, ntk, alpha, pik):
 
 
 def compute_wti(articles, zti):
+    """
+    :param articles: articles (See get_articles's doc for more info)
+    :param zti: zti (See dictionary above for more info)
+    :return: wti (See dictionary above for more info)
+    """
     wti = defaultdict(lambda: defaultdict(lambda: 0))
     for t in range(len(articles)):
         m = max(zti[t].values())
@@ -142,6 +203,11 @@ def compute_wti(articles, zti):
 
 
 def compute_alpha(articles, wti):
+    """
+    :param articles: articles (See get_articles's doc for more info)
+    :param wti: wti (See dictionary above for more info)
+    :return: alphas (See dictionary above for more info)
+    """
     alpha = defaultdict(lambda: 0)
     for i in range(len(CLUSTERS)):
         alpha[i] = sum([wti[t][i] for t in range(len(articles))]) / len(articles)
@@ -156,6 +222,14 @@ def compute_alpha(articles, wti):
 
 
 def compute_pik(articles, vocabulary, k_t_map, wti, ntk):
+    """
+    :param articles: articles (See get_articles's doc for more info)
+    :param vocabulary: a vocabulary (See get_vocabulary's doc for more info)
+    :param k_t_map: (See build_k_t_map's doc for more info)
+    :param wti: wti (See dictionary above for more info)
+    :param ntk: ntk (See dictionary above for more info)
+    :return: pik (See dictionary above for more info)
+    """
     pik = defaultdict(lambda: defaultdict(lambda: 0))
     for i in range(len(CLUSTERS)):
         denominator = LIDSTONE_LAMBDA * len(vocabulary) + \
@@ -167,6 +241,14 @@ def compute_pik(articles, vocabulary, k_t_map, wti, ntk):
 
 
 def compute_log_likelihood(articles, t_k_map, ntk, alpha, pik):
+    """
+    :param articles: articles (See get_articles's doc for more info)
+    :param t_k_map: (See build_t_k_map's doc for more info)
+    :param ntk: ntk (See dictionary above for more info)
+    :param alpha: alphas (See dictionary above for more info)
+    :param pik: pik (See dictionary above for more info)
+    :return: the log likelihood
+    """
     log_likelihood = 0
     zti = compute_zti(articles, t_k_map, ntk, alpha, pik)
     for t in range(len(articles)):
@@ -177,43 +259,64 @@ def compute_log_likelihood(articles, t_k_map, ntk, alpha, pik):
 
 
 def compute_perplexity(log_likelihood, word_count):
+    """
+    :param log_likelihood: (See compute_log_likelihood's doc for more info)
+    :param word_count: total words count include duplicates(above threshold of the vocabulary)
+    :return: the perplexity
+    """
     return math.exp(-log_likelihood / word_count)
 
 
 def run_em_initialization(articles, vocabulary):
+    """
+    Runs the expectation maximization initialization
+    """
     wti = build_wti(articles)
     ntk = build_ntk(articles, vocabulary)
     return wti, ntk
 
 
 def run_e_phase(articles, t_k_map, ntk, alpha, pik):
+    """
+    Runs the expectation phase
+    """
     zti = compute_zti(articles, t_k_map, ntk, alpha, pik)
     wti = compute_wti(articles, zti)
     return wti
 
 
 def run_m_phase(articles, vocabulary, k_t_map, wti, ntk):
+    """
+    Runs the maximization algorithm
+    """
     alpha = compute_alpha(articles, wti)
     pik = compute_pik(articles, vocabulary, k_t_map, wti, ntk)
     return alpha, pik
 
 
 def run_em(articles, vocabulary, word_count):
+    """
+    Runs the expectation maximization algorithm
+    """
     k_t_map = build_k_t_map(articles, vocabulary)
     t_k_map = build_t_k_map(articles, vocabulary)
     logging.debug("EM start")
     wti, ntk = run_em_initialization(articles, vocabulary)
     alpha, pik = run_m_phase(articles, vocabulary, k_t_map, wti, ntk)
+    log_likelihoods = [compute_log_likelihood(articles, t_k_map, ntk, alpha, pik)]
 
-    for iteration_number in range(ITERATION_COUNT):
-        logging.debug("%d expectation start", iteration_number)
+    for iteration_number in range(MAX_ITERATION_COUNT):
+        logging.debug("%d - expectation start", iteration_number)
         wti = run_e_phase(articles, t_k_map, ntk, alpha, pik)
-        logging.debug("%d maximization start", iteration_number)
+        logging.debug("%d - maximization start", iteration_number)
         alpha, pik = run_m_phase(articles, vocabulary, k_t_map, wti, ntk)
-        log_likelihood = compute_log_likelihood(articles, t_k_map, ntk, alpha, pik)
-        logging.debug("%d log likelihood = %f", iteration_number, log_likelihood)
-        perplexity = compute_perplexity(log_likelihood, word_count)
-        logging.debug("%d perplexity = %f", iteration_number, perplexity)
+        log_likelihoods.append(compute_log_likelihood(articles, t_k_map, ntk, alpha, pik))
+        logging.debug("%d - log likelihood = %f", iteration_number, log_likelihoods[-1])
+        perplexity = compute_perplexity(log_likelihoods[-1], word_count)
+        logging.debug("%d - perplexity = %f", iteration_number, perplexity)
+        if log_likelihoods[-2] > log_likelihoods[-1] - STOP_EM_LOG_LIKELIHOOD_THRESHOLD:
+            break
+
     build_clusters(articles, wti)
     logging.debug("EM done")
 
@@ -229,8 +332,8 @@ def main(args):
     vocabulary, word_count = get_vocabulary(args.develop_file_path)
     articles = get_articles(args.develop_file_path, vocabulary)
     run_em(articles, vocabulary, word_count)
-    print(build_confusion_matrix())
-    print(compute_accuracy(articles))
+    logging.info("Confusion matrix = %s", str(build_confusion_matrix()))
+    logging.info("Accuracy = %f", compute_accuracy(articles))
 
 
 if __name__ == "__main__":
